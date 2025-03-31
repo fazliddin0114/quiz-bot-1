@@ -88,7 +88,7 @@ async def start_cmd(message: types.Message):
     
     await message.answer(
         f"👋 Salom, {user.full_name}!\n\n"
-        "🎥 Kino kodini yuboring yoki admin paneliga kirish uchun /admin buyrug'ini yuboring.",
+        "🎥 Yuklamoqchi bo'lgan kinoyingizni kodini yuboring: ",
         reply_markup=builder.as_markup(resize_keyboard=True)
     )
 
@@ -112,61 +112,105 @@ async def admin_panel(message: types.Message):
 
     await message.answer("👋 Admin paneliga xush kelibsiz!", reply_markup=keyboard)
 
+import random
+import string
+from datetime import datetime
+
 # Kino qo'shish funksiyalari
 @dp.message(F.text == "🎬 Kino qo'shish")
 async def start_adding_movie(message: Message):
+    """Kino qo'shish jarayonini boshlash"""
     if message.from_user.id not in Config.ADMIN_IDS:
+        await message.answer("❌ Sizda bunday huquq yo'q!")
         return
     
     await message.answer(
-        "📤 Kino qo'shish uchun video yoki fayl yuboring.\n\n"
-        "❗ Eslatma: Kino avtomatik ravishda maxfiy kanalga joylanadi va raqam beriladi.",
+        "🎥 Kino qo'shish uchun quyidagilardan birini yuboring:\n\n"
+        "• Video fayl\n"
+        "• Document (video fayl)\n\n"
+        "📝 <b>Eslatma:</b>\n"
+        "1. Kino avtomatik ravishda maxfiy kanalga joylanadi\n"
+        "2. Har bir kino uchun maxsus kod generatsiya qilinadi\n"
+        "3. Agar sarlavha ko'rsatmasangiz, kino nomi avtomatik yaratiladi",
         reply_markup=ReplyKeyboardRemove()
     )
 
+def generate_movie_code():
+    """6 xonali tasodifiy kino kodi generatsiya qilish"""
+    return ''.join(random.choices(string.digits, k=6))
+
 @dp.message(F.from_user.id.in_(Config.ADMIN_IDS) & (F.video | F.document))
 async def handle_new_movie(message: Message):
-    global current_movie_id
-    
-    if message.video:
-        file_id = message.video.file_id
-        file_type = "video"
-    elif message.document:
-        file_id = message.document.file_id
-        file_type = "document"
-    else:
-        return
-    
-    caption = message.caption if message.caption else f"🎬 Kino {current_movie_id}"
-    
+    """Yangi kino qabul qilish va saqlash"""
     try:
-        if file_type == "video":
-            sent_msg = await bot.send_video(Config.SECRET_CHANNEL_ID, file_id, caption=caption)
+        # Fayl ma'lumotlarini olish
+        if message.video:
+            file = message.video
+            file_type = "video"
         else:
-            sent_msg = await bot.send_document(Config.SECRET_CHANNEL_ID, file_id, caption=caption)
+            file = message.document
+            file_type = "document"
         
-        movies_db[str(current_movie_id)] = {
-            "file_id": file_id,
+        # Sarlavha va kod generatsiyasi
+        caption = message.caption or f"🎬 Kino {datetime.now().strftime('%d.%m.%Y')}"
+        movie_code = generate_movie_code()
+        
+        # Kino kanalga yuborish
+        if file_type == "video":
+            sent_msg = await bot.send_video(
+                chat_id=Config.SECRET_CHANNEL_ID,
+                video=file.file_id,
+                caption=f"{caption}\n\n🔐 Kino kodi: <code>{movie_code}</code>"
+            )
+        else:
+            sent_msg = await bot.send_document(
+                chat_id=Config.SECRET_CHANNEL_ID,
+                document=file.file_id,
+                caption=f"{caption}\n\n🔐 Kino kodi: <code>{movie_code}</code>"
+            )
+        
+        # Ma'lumotlarni bazaga saqlash
+        movies_db[movie_code] = {
+            "file_id": file.file_id,
             "file_type": file_type,
             "caption": caption,
-            "message_id": sent_msg.message_id
+            "message_id": sent_msg.message_id,
+            "date_added": datetime.now().strftime('%Y-%m-%d %H:%M'),
+            "added_by": message.from_user.id
         }
         
+        # Adminga javob
         await message.answer(
-            f"✅ Kino #{current_movie_id} muvaffaqiyatli qo'shildi!\n\n"
-            f"📝 Sarlavha: {caption}\n"
-            f"🔗 Kanaldagi xabar: https://t.me/{Config.SECRET_CHANNEL_USERNAME}/{sent_msg.message_id}",
+            f"🎉 <b>Kino muvaffaqiyatli qo'shildi!</b>\n\n"
+            f"📌 Nomi: {caption}\n"
+            f"🔢 Kodi: <code>{movie_code}</code>\n"
+            f"📆 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"🔗 Kanaldagi post: https://t.me/{Config.SECRET_CHANNEL_USERNAME}/{sent_msg.message_id}",
             reply_markup=ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="🏠 Admin panel")]],
+                keyboard=[
+                    [KeyboardButton(text="➕ Yana kino qo'shish")],
+                    [KeyboardButton(text="🏠 Bosh menyu")]
+                ],
+                resize_keyboard=True
+            ),
+            disable_web_page_preview=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Kino qo'shishda xato: {str(e)}", exc_info=True)
+        await message.answer(
+            "❌ Kino qo'shishda xatolik yuz berdi!\n\n"
+            "Iltimos, quyidagilarni tekshiring:\n"
+            "1. Fayl hajmi (20MB dan oshmasligi kerak)\n"
+            "2. Internet aloqasi\n"
+            "3. Fayl formati (MP4, MKV va h.k.)\n\n"
+            "Qayta urunib ko'ring yoki texnik yordamga murojaat qiling.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="🔙 Orqaga")]],
                 resize_keyboard=True
             )
         )
-        
-        current_movie_id += 1
-        
-    except Exception as e:
-        logger.error(f"Kino qo'shishda xato: {e}")
-        await message.answer("❌ Kino qo'shishda xatolik yuz berdi. Iltimos, qayta urunib ko'ring.")
+
 
 # Kino o'chirish funksiyalari
 @dp.message(F.text == "❌ Kino o'chirish")
